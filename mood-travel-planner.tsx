@@ -1,0 +1,737 @@
+import React, { useState, useEffect } from 'react';
+import { Heart, Zap, Coffee, Waves, Mountain, Sun, Moon, Sparkles, Calendar, DollarSign, MapPin, ArrowRight, ArrowLeft, Check, Clock, Map, Camera, Book, Users, Utensils, Star, Share2, Download } from 'lucide-react';
+
+const MoodTravelPlanner = () => {
+  const [step, setStep] = useState('welcome');
+  const [tripData, setTripData] = useState({
+    mood: '',
+    energy: '',
+    restStyle: '',
+    destination: '',
+    days: 3,
+    budget: 500,
+    currency: '€'
+  });
+  const [currentTrip, setCurrentTrip] = useState(null);
+  const [savedTrips, setSavedTrips] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [currentDay, setCurrentDay] = useState(0);
+  const [revealedDays, setRevealedDays] = useState([0]);
+
+  useEffect(() => {
+    loadSavedTrips();
+  }, []);
+
+  const loadSavedTrips = async () => {
+    try {
+      const keys = await window.storage.list('trip:');
+      if (keys && keys.keys) {
+        const trips = [];
+        for (const key of keys.keys) {
+          const result = await window.storage.get(key);
+          if (result) trips.push(JSON.parse(result.value));
+        }
+        setSavedTrips(trips.sort((a, b) => b.createdAt - a.createdAt));
+      }
+    } catch (error) {
+      console.log('No saved trips yet');
+    }
+  };
+
+  const saveTrip = async (trip) => {
+    try {
+      await window.storage.set(`trip:${trip.createdAt}`, JSON.stringify(trip));
+      await loadSavedTrips();
+    } catch (error) {
+      console.error('Error saving trip:', error);
+    }
+  };
+
+  const generateItinerary = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          messages: [{
+            role: "user",
+            content: `Create a ${tripData.days}-day deeply personalized travel itinerary.
+
+EMOTIONAL CONTEXT:
+- Mood: ${tripData.mood}
+- Energy: ${tripData.energy}
+- Rest style: ${tripData.restStyle}
+- Budget: ${tripData.currency}${tripData.budget}
+- Destination: ${tripData.destination || 'suggest one that matches their emotional needs'}
+
+Create a trip that FEELS like it was made by someone who truly understands them. Include:
+- Specific venues/places (real ones)
+- Time estimates for each activity
+- Budget breakdown per day
+- Local cultural tips
+- Hidden gems, not tourist traps
+- Permission to rest when needed
+- Why each choice matters for their emotional state
+
+Return ONLY valid JSON (no markdown):
+{
+  "tripName": "Evocative 2-3 word name",
+  "destination": "City, Country",
+  "vibe": "One beautiful sentence about the emotional journey",
+  "totalBudget": ${tripData.budget},
+  "whyThisPlace": "2-3 sentences on why this destination matches their mood",
+  "packingTips": ["3-4 specific items to pack based on their mood"],
+  "localTips": ["3-4 insider cultural/practical tips"],
+  "days": [
+    {
+      "day": 1,
+      "theme": "Day emotional arc",
+      "budgetEstimate": 100,
+      "activities": [
+        {
+          "time": "9:00 AM",
+          "duration": "2 hours",
+          "activity": "Specific place/activity",
+          "why": "Why this matters for their emotional state",
+          "cost": 15,
+          "type": "food/culture/rest/adventure/social"
+        }
+      ],
+      "emotionalNote": "Personal encouragement based on their mood"
+    }
+  ]
+}`
+          }]
+        })
+      });
+
+      const data = await response.json();
+      const text = data.content[0].text.replace(/```json|```/g, '').trim();
+      const itinerary = JSON.parse(text);
+      
+      const trip = {
+        ...tripData,
+        ...itinerary,
+        createdAt: Date.now(),
+        currentDay: 0,
+        dailyCheckIns: []
+      };
+      
+      setCurrentTrip(trip);
+      await saveTrip(trip);
+      setRevealedDays([0]);
+      setCurrentDay(0);
+      setStep('itinerary');
+    } catch (error) {
+      console.error('Error:', error);
+      alert('Something went wrong. Please try again.');
+    }
+    setLoading(false);
+  };
+
+  const handleDailyCheckIn = async (emoji, feeling) => {
+    setLoading(true);
+    const checkIn = { day: currentDay, emoji, feeling, timestamp: Date.now() };
+    const nextDayIndex = currentDay + 1;
+    
+    if (nextDayIndex >= currentTrip.days.length) {
+      setStep('itinerary');
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 2000,
+          messages: [{
+            role: "user",
+            content: `Adjust day ${nextDayIndex + 1} based on how they're feeling.
+
+Original plan: ${JSON.stringify(currentTrip.days[nextDayIndex])}
+
+Today (Day ${currentDay + 1}) check-in: ${emoji} - ${feeling}
+
+Their mood profile: ${currentTrip.mood}, ${currentTrip.energy} energy
+
+Adjust tomorrow intelligently:
+- If tired/heavy: lighten activities, add rest, remove pressure
+- If energized/pumped: can add more, but keep it balanced
+- If reflective: add solo contemplative activities
+- Keep budget similar
+
+Return ONLY valid JSON:
+{
+  "day": ${nextDayIndex + 1},
+  "theme": "Adjusted theme",
+  "budgetEstimate": 100,
+  "activities": [
+    {
+      "time": "9:00 AM",
+      "duration": "2 hours",
+      "activity": "Activity",
+      "why": "Why this fits their current emotional state",
+      "cost": 15,
+      "type": "food/culture/rest/adventure/social"
+    }
+  ],
+  "emotionalNote": "Personal note acknowledging how they felt today",
+  "adjustmentReason": "Brief note on what changed and why"
+}`
+          }]
+        })
+      });
+
+      const data = await response.json();
+      const text = data.content[0].text.replace(/```json|```/g, '').trim();
+      const adjustedDay = JSON.parse(text);
+      
+      const updatedTrip = {
+        ...currentTrip,
+        days: currentTrip.days.map((d, i) => i === nextDayIndex ? adjustedDay : d),
+        dailyCheckIns: [...currentTrip.dailyCheckIns, checkIn]
+      };
+      
+      setCurrentTrip(updatedTrip);
+      await saveTrip(updatedTrip);
+      setCurrentDay(nextDayIndex);
+      setRevealedDays([...revealedDays, nextDayIndex]);
+      setStep('itinerary');
+    } catch (error) {
+      console.error('Error:', error);
+      setStep('itinerary');
+    }
+    setLoading(false);
+  };
+
+  const revealNextDay = () => {
+    if (currentDay < currentTrip.days.length - 1) {
+      setCurrentDay(currentDay + 1);
+      if (!revealedDays.includes(currentDay + 1)) {
+        setRevealedDays([...revealedDays, currentDay + 1]);
+      }
+    }
+  };
+
+  const moodOptions = [
+    { value: 'burnt-out', label: 'Burnt Out', desc: 'Need to disconnect', icon: Moon, gradient: 'from-indigo-400 to-purple-500' },
+    { value: 'heartbroken', label: 'Heartbroken', desc: 'Ready to heal', icon: Heart, gradient: 'from-pink-400 to-rose-500' },
+    { value: 'seeking-clarity', label: 'Seeking Clarity', desc: 'Want to find yourself', icon: Sparkles, gradient: 'from-purple-400 to-indigo-500' },
+    { value: 'celebrating', label: 'Celebrating', desc: 'Life is good', icon: Sun, gradient: 'from-yellow-400 to-orange-500' },
+    { value: 'restless', label: 'Restless', desc: 'Craving adventure', icon: Zap, gradient: 'from-orange-400 to-red-500' }
+  ];
+
+  const energyLevels = [
+    { value: 'low', label: 'Low Energy', desc: 'Need permission to rest', icon: '🌙' },
+    { value: 'medium', label: 'Medium', desc: 'Gentle and steady', icon: '☁️' },
+    { value: 'high', label: 'High Energy', desc: 'Ready for anything', icon: '⚡' }
+  ];
+
+  const restStyles = [
+    { value: 'nature-silence', label: 'Nature + Silence', icon: Mountain, desc: 'Mountains, forests, quiet' },
+    { value: 'cafes-books', label: 'Cafes + Culture', icon: Coffee, desc: 'Slow mornings, local spots' },
+    { value: 'beaches-walks', label: 'Beaches + Walking', icon: Waves, desc: 'Ocean, long walks, sunset' }
+  ];
+
+  const emojiOptions = [
+    { emoji: '😊', label: 'Energized', feeling: 'feeling great and energized' },
+    { emoji: '😌', label: 'Peaceful', feeling: 'calm and content' },
+    { emoji: '😴', label: 'Exhausted', feeling: 'need way more rest' },
+    { emoji: '🤔', label: 'Reflective', feeling: 'thoughtful and introspective' },
+    { emoji: '😢', label: 'Heavy', feeling: 'emotionally drained' },
+    { emoji: '🔥', label: 'Pumped', feeling: 'energized, want more adventure' }
+  ];
+
+  const activityIcons = {
+    food: Utensils,
+    culture: Book,
+    rest: Coffee,
+    adventure: Mountain,
+    social: Users
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="relative">
+            <div className="animate-spin rounded-full h-20 w-20 border-4 border-purple-500/30 border-t-purple-500 mx-auto"></div>
+            <Sparkles className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-purple-300 animate-pulse" />
+          </div>
+          <p className="text-purple-200 mt-6 text-lg">Crafting your perfect journey...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <div className="max-w-6xl mx-auto p-4 sm:p-8">
+        
+        {step === 'welcome' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="text-center py-16 max-w-3xl">
+              <div className="relative inline-block mb-8">
+                <div className="absolute inset-0 bg-purple-500 blur-3xl opacity-50 animate-pulse"></div>
+                <Sparkles className="relative w-20 h-20 text-purple-400 mx-auto" />
+              </div>
+              <h1 className="text-6xl font-bold bg-gradient-to-r from-purple-200 via-pink-200 to-purple-200 bg-clip-text text-transparent mb-6 leading-tight">
+                Travel by Feeling
+              </h1>
+              <p className="text-2xl text-purple-200/90 mb-12 leading-relaxed">
+                Stop planning trips based on locations.<br />
+                Start planning based on how you actually feel.
+              </p>
+              <button
+                onClick={() => setStep('mood')}
+                className="group relative bg-gradient-to-r from-purple-500 to-pink-500 text-white px-10 py-4 rounded-full font-semibold text-lg hover:shadow-2xl hover:shadow-purple-500/50 transition-all duration-300 transform hover:scale-105"
+              >
+                <span className="relative z-10 flex items-center gap-2">
+                  Begin Your Journey
+                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                </span>
+              </button>
+              
+              {savedTrips.length > 0 && (
+                <div className="mt-20">
+                  <h2 className="text-xl font-semibold text-purple-300 mb-6">Your Past Journeys</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {savedTrips.slice(0, 3).map((trip, i) => (
+                      <div
+                        key={i}
+                        onClick={() => { setCurrentTrip(trip); setCurrentDay(trip.currentDay || 0); setRevealedDays(trip.days.map((_, i) => i).slice(0, (trip.currentDay || 0) + 1)); setStep('itinerary'); }}
+                        className="group bg-white/10 backdrop-blur-lg p-6 rounded-2xl hover:bg-white/20 transition cursor-pointer border border-white/10"
+                      >
+                        <MapPin className="w-6 h-6 text-purple-400 mb-3" />
+                        <h3 className="font-bold text-white text-lg mb-2">{String(trip.tripName || 'Untitled')}</h3>
+                        <p className="text-purple-200 text-sm">{String(trip.destination || '')} • {trip.days?.length || 0} days</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === 'mood' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-3xl w-full">
+              <button onClick={() => setStep('welcome')} className="text-purple-300 hover:text-white flex items-center gap-2 mb-8 transition">
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <h2 className="text-4xl font-bold text-white mb-3">How are you feeling?</h2>
+              <p className="text-purple-200/80 mb-10 text-lg">This shapes everything — be honest.</p>
+              
+              <div className="grid grid-cols-1 gap-4">
+                {moodOptions.map(option => (
+                  <button
+                    key={option.value}
+                    onClick={() => { setTripData({...tripData, mood: option.value}); setStep('energy'); }}
+                    className="group relative overflow-hidden bg-white/10 backdrop-blur-lg p-8 rounded-2xl text-left hover:bg-white/20 transition border border-white/10"
+                  >
+                    <div className={`absolute inset-0 bg-gradient-to-r ${option.gradient} opacity-0 group-hover:opacity-10 transition-opacity`}></div>
+                    <div className="relative flex items-center gap-4">
+                      <div className={`bg-gradient-to-br ${option.gradient} p-4 rounded-xl`}>
+                        <option.icon className="w-8 h-8 text-white" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-white text-xl mb-1">{option.label}</div>
+                        <div className="text-purple-200/70">{option.desc}</div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'energy' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-2xl w-full">
+              <button onClick={() => setStep('mood')} className="text-purple-300 hover:text-white flex items-center gap-2 mb-8 transition">
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <h2 className="text-4xl font-bold text-white mb-3">Energy level?</h2>
+              <p className="text-purple-200/80 mb-10 text-lg">No judgment — we'll match your pace.</p>
+              
+              <div className="space-y-4">
+                {energyLevels.map(option => (
+                  <button
+                    key={option.value}
+                    onClick={() => { setTripData({...tripData, energy: option.value}); setStep('rest'); }}
+                    className="w-full bg-white/10 backdrop-blur-lg p-8 rounded-2xl text-left hover:bg-white/20 transition border border-white/10"
+                  >
+                    <div className="flex items-center gap-4">
+                      <span className="text-5xl">{option.icon}</span>
+                      <div>
+                        <div className="font-bold text-white text-xl mb-1">{option.label}</div>
+                        <div className="text-purple-200/70">{option.desc}</div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'rest' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-2xl w-full">
+              <button onClick={() => setStep('energy')} className="text-purple-300 hover:text-white flex items-center gap-2 mb-8 transition">
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <h2 className="text-4xl font-bold text-white mb-3">What recharges you?</h2>
+              <p className="text-purple-200/80 mb-10 text-lg">Everyone rests differently.</p>
+              
+              <div className="space-y-4">
+                {restStyles.map(option => (
+                  <button
+                    key={option.value}
+                    onClick={() => { setTripData({...tripData, restStyle: option.value}); setStep('details'); }}
+                    className="w-full bg-white/10 backdrop-blur-lg p-8 rounded-2xl text-left hover:bg-white/20 transition border border-white/10 flex items-center gap-4"
+                  >
+                    <option.icon className="w-10 h-10 text-purple-400" />
+                    <div>
+                      <div className="font-bold text-white text-xl mb-1">{option.label}</div>
+                      <div className="text-purple-200/70">{option.desc}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'details' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-2xl w-full bg-white/10 backdrop-blur-lg p-10 rounded-3xl border border-white/10">
+              <button onClick={() => setStep('rest')} className="text-purple-300 hover:text-white flex items-center gap-2 mb-8 transition">
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <h2 className="text-4xl font-bold text-white mb-10">Final details</h2>
+              
+              <div className="space-y-8">
+                <div>
+                  <label className="block text-purple-200 font-medium mb-3 flex items-center gap-2">
+                    <MapPin className="w-5 h-5" />
+                    Where? (optional — we can suggest based on your vibe)
+                  </label>
+                  <input
+                    type="text"
+                    value={tripData.destination}
+                    onChange={(e) => setTripData({...tripData, destination: e.target.value})}
+                    placeholder="Lisbon, Bali, or leave blank..."
+                    className="w-full p-4 bg-white/5 border border-white/10 rounded-xl text-white placeholder-purple-300/50 focus:border-purple-400 focus:ring-2 focus:ring-purple-400/20 transition"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-purple-200 font-medium mb-3 flex items-center gap-2">
+                      <Calendar className="w-5 h-5" />
+                      Days
+                    </label>
+                    <input
+                      type="number"
+                      value={tripData.days}
+                      onChange={(e) => setTripData({...tripData, days: parseInt(e.target.value)})}
+                      min="2"
+                      max="14"
+                      className="w-full p-4 bg-white/5 border border-white/10 rounded-xl text-white focus:border-purple-400 focus:ring-2 focus:ring-purple-400/20 transition"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-purple-200 font-medium mb-3 flex items-center gap-2">
+                      <DollarSign className="w-5 h-5" />
+                      Budget
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={tripData.currency}
+                        onChange={(e) => setTripData({...tripData, currency: e.target.value})}
+                        className="p-4 bg-white/5 border border-white/10 rounded-xl text-white focus:border-purple-400 focus:ring-2 focus:ring-purple-400/20"
+                      >
+                        <option value="€">€</option>
+                        <option value="$">$</option>
+                        <option value="£">£</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={tripData.budget}
+                        onChange={(e) => setTripData({...tripData, budget: parseInt(e.target.value)})}
+                        min="100"
+                        step="50"
+                        className="flex-1 p-4 bg-white/5 border border-white/10 rounded-xl text-white focus:border-purple-400 focus:ring-2 focus:ring-purple-400/20 transition"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={generateItinerary}
+                className="w-full mt-10 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-5 rounded-xl font-bold text-lg hover:shadow-2xl hover:shadow-purple-500/50 transition-all duration-300 transform hover:scale-105 flex items-center justify-center gap-3"
+              >
+                Create My Journey <Sparkles className="w-6 h-6" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 'itinerary' && currentTrip && (
+          <div className="py-8">
+            <div className="bg-gradient-to-br from-white/10 to-white/5 backdrop-blur-xl rounded-3xl border border-white/10 overflow-hidden">
+              <div className="bg-gradient-to-r from-purple-600/30 to-pink-600/30 p-10 border-b border-white/10">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="inline-block bg-white/20 backdrop-blur-sm px-4 py-2 rounded-full text-purple-200 text-sm font-medium mb-4">
+                      {currentTrip.days?.length || 0} Day Journey
+                    </div>
+                    <h1 className="text-5xl font-bold text-white mb-4">{String(currentTrip.tripName || 'Your Journey')}</h1>
+                    <p className="text-2xl text-purple-200 mb-2 flex items-center gap-2">
+                      <MapPin className="w-6 h-6" />
+                      {String(currentTrip.destination || '')}
+                    </p>
+                    <p className="text-purple-200/80 text-lg italic max-w-2xl">{String(currentTrip.vibe || '')}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="bg-white/10 backdrop-blur-sm p-3 rounded-xl hover:bg-white/20 transition">
+                      <Share2 className="w-5 h-5 text-white" />
+                    </button>
+                    <button className="bg-white/10 backdrop-blur-sm p-3 rounded-xl hover:bg-white/20 transition">
+                      <Download className="w-5 h-5 text-white" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4 mt-8">
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4">
+                    <DollarSign className="w-6 h-6 text-purple-300 mb-2" />
+                    <div className="text-white font-bold text-lg">{currentTrip.currency}{currentTrip.totalBudget}</div>
+                    <div className="text-purple-200/70 text-sm">Total Budget</div>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4">
+                    <Calendar className="w-6 h-6 text-purple-300 mb-2" />
+                    <div className="text-white font-bold text-lg">{currentTrip.days?.length || 0} Days</div>
+                    <div className="text-purple-200/70 text-sm">Duration</div>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4">
+                    <Heart className="w-6 h-6 text-purple-300 mb-2" />
+                    <div className="text-white font-bold text-lg capitalize">{currentTrip.mood}</div>
+                    <div className="text-purple-200/70 text-sm">Vibe</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-10">
+                {currentTrip.whyThisPlace && (
+                  <div className="bg-purple-500/10 border border-purple-500/20 rounded-2xl p-6 mb-8">
+                    <h3 className="text-white font-bold text-lg mb-3 flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-purple-400" />
+                      Why {currentTrip.destination}?
+                    </h3>
+                    <p className="text-purple-100/90 leading-relaxed">{String(currentTrip.whyThisPlace || '')}</p>
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-6 mb-10">
+                  {currentTrip.packingTips && currentTrip.packingTips.length > 0 && (
+                    <div className="bg-white/5 rounded-2xl p-6 border border-white/10">
+                      <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+                        <Camera className="w-5 h-5 text-purple-400" />
+                        Pack These
+                      </h3>
+                      <ul className="space-y-2">
+                        {currentTrip.packingTips.map((tip, i) => (
+                          <li key={i} className="text-purple-200/90 flex items-start gap-2">
+                            <Check className="w-4 h-4 text-purple-400 mt-1 flex-shrink-0" />
+                            <span>{String(tip)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {currentTrip.localTips && currentTrip.localTips.length > 0 && (
+                    <div className="bg-white/5 rounded-2xl p-6 border border-white/10">
+                      <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+                        <Star className="w-5 h-5 text-purple-400" />
+                        Local Insider Tips
+                      </h3>
+                      <ul className="space-y-2">
+                        {currentTrip.localTips.map((tip, i) => (
+                          <li key={i} className="text-purple-200/90 flex items-start gap-2">
+                            <span className="text-purple-400">•</span>
+                            <span>{String(tip)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <h3 className="text-white font-bold text-2xl mb-6">Your Itinerary</h3>
+
+                <div className="space-y-8">
+                  {currentTrip.days.map((day, index) => {
+                    const isRevealed = revealedDays.includes(index);
+                    const isCurrent = index === currentDay;
+                    
+                    if (!isRevealed) {
+                      return (
+                        <div key={index} className="bg-white/5 rounded-2xl p-8 border border-white/10 border-dashed">
+                          <div className="text-center text-purple-300/50">
+                            <Moon className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                            <p>Day {day.day} — Locked</p>
+                            <p className="text-sm mt-2">Complete your daily check-in to reveal</p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={index}
+                        className={`bg-white/5 rounded-2xl p-8 border transition-all ${
+                          isCurrent 
+                            ? 'border-purple-400 shadow-xl shadow-purple-500/20' 
+                            : 'border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-6">
+                          <div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-3xl font-bold text-white">Day {day.day}</h3>
+                              {isCurrent && (
+                                <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs px-3 py-1 rounded-full font-semibold">
+                                  Today
+                                </span>
+                              )}
+                              {day.adjustmentReason && (
+                                <span className="bg-green-500/20 text-green-300 text-xs px-3 py-1 rounded-full font-semibold">
+                                  Adjusted for you
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xl text-purple-300 font-medium">{String(day.theme || '')}</p>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-white font-bold text-lg">{currentTrip.currency}{day.budgetEstimate}</div>
+                            <div className="text-purple-300/70 text-sm">Budget</div>
+                          </div>
+                        </div>
+
+                        {day.adjustmentReason && (
+                          <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 mb-6">
+                            <p className="text-green-300 text-sm">
+                              ✨ <strong>Adjusted:</strong> {String(day.adjustmentReason)}
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="space-y-4 mb-6">
+                          {day.activities && day.activities.map((activity, i) => {
+                            const Icon = activityIcons[activity.type] || Clock;
+                            return (
+                              <div key={i} className="bg-white/5 rounded-xl p-5 border border-white/10 hover:bg-white/10 transition">
+                                <div className="flex items-start gap-4">
+                                  <div className="bg-purple-500/20 p-3 rounded-lg flex-shrink-0">
+                                    <Icon className="w-5 h-5 text-purple-300" />
+                                  </div>
+                                  <div className="flex-1">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-3">
+                                        <span className="text-purple-300 font-semibold">{activity.time}</span>
+                                        <span className="text-purple-400/50">•</span>
+                                        <span className="text-purple-300/70 text-sm">{activity.duration}</span>
+                                      </div>
+                                      <span className="text-white font-semibold">{currentTrip.currency}{activity.cost}</span>
+                                    </div>
+                                    <h4 className="text-white font-bold text-lg mb-2">{String(activity.activity || '')}</h4>
+                                    <p className="text-purple-200/80 text-sm leading-relaxed">{String(activity.why || '')}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {day.emotionalNote && (
+                          <div className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/20 rounded-xl p-5">
+                            <p className="text-yellow-200/90 italic leading-relaxed">
+                              💛 {String(day.emotionalNote)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex gap-4 mt-10">
+                  <button
+                    onClick={() => { setStep('welcome'); setCurrentTrip(null); }}
+                    className="text-purple-300 hover:text-white flex items-center gap-2 transition"
+                  >
+                    <ArrowLeft className="w-4 h-4" /> New Trip
+                  </button>
+                  
+                  <button
+                    onClick={() => setStep('checkin')}
+                    disabled={currentDay >= currentTrip.days.length - 1}
+                    className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-4 rounded-xl font-bold hover:shadow-2xl hover:shadow-purple-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Daily Check-In for Day {currentDay + 1}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'checkin' && (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-3xl w-full bg-white/10 backdrop-blur-xl rounded-3xl p-10 border border-white/10">
+              <h2 className="text-4xl font-bold text-white mb-3">How was Day {currentDay + 1}?</h2>
+              <p className="text-purple-200 mb-10 text-lg">Your answer shapes tomorrow's adventure.</p>
+              
+              <div className="grid grid-cols-2 gap-6">
+                {emojiOptions.map(option => (
+                  <button
+                    key={option.emoji}
+                    onClick={() => handleDailyCheckIn(option.emoji, option.feeling)}
+                    className="bg-white/5 hover:bg-white/10 p-8 rounded-2xl transition border border-white/10 hover:border-purple-400 text-center group"
+                  >
+                    <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">{option.emoji}</div>
+                    <div className="font-bold text-white text-xl mb-2">{option.label}</div>
+                    <div className="text-purple-200/70 text-sm">{option.feeling}</div>
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setStep('itinerary')}
+                className="mt-8 text-purple-300 hover:text-white flex items-center gap-2 transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+};
+
+export default MoodTravelPlanner;
